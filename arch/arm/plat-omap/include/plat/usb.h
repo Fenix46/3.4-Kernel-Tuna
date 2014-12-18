@@ -3,7 +3,6 @@
 #ifndef	__ASM_ARCH_OMAP_USB_H
 #define	__ASM_ARCH_OMAP_USB_H
 
-#include <linux/io.h>
 #include <linux/usb/musb.h>
 #include <plat/board.h>
 
@@ -42,6 +41,11 @@ struct usbhs_omap_board_data {
 	 * Each PHY can have a separate regulator.
 	 */
 	struct regulator		*regulator[OMAP3_HS_USB_PORTS];
+	/*
+	 * Each Port can have an external transceiver requiring clock control
+	 * for low power mode entry
+	 */
+	struct clk			*transceiver_clk[OMAP3_HS_USB_PORTS];
 };
 
 struct ehci_hcd_omap_platform_data {
@@ -49,11 +53,18 @@ struct ehci_hcd_omap_platform_data {
 	int				reset_gpio_port[OMAP3_HS_USB_PORTS];
 	struct regulator		*regulator[OMAP3_HS_USB_PORTS];
 	unsigned			phy_reset:1;
+	/*
+	 * Each Port can have an external transceiver requiring clock control
+	 * for low power mode entry
+	 */
+	struct clk			*transceiver_clk[OMAP3_HS_USB_PORTS];
+	int				*usbhs_update_sar;
 };
 
 struct ohci_hcd_omap_platform_data {
 	enum usbhs_omap_port_mode	port_mode[OMAP3_HS_USB_PORTS];
 	unsigned			es2_compatibility:1;
+	int				*usbhs_update_sar;
 };
 
 struct usbhs_omap_platform_data {
@@ -102,56 +113,17 @@ extern void usb_musb_init(struct omap_musb_board_data *board_data);
 extern void usbhs_init(const struct usbhs_omap_board_data *pdata);
 
 extern int omap4430_phy_power(struct device *dev, int ID, int on);
-extern int omap4430_phy_set_clk(struct device *dev, int on);
 extern int omap4430_phy_init(struct device *dev);
 extern int omap4430_phy_exit(struct device *dev);
+extern int omap4_charger_detect(void);
 extern int omap4430_phy_suspend(struct device *dev, int suspend);
-
-/*
- * NOTE: Please update omap USB drivers to use ioremap + read/write
- */
-
-#define OMAP2_L4_IO_OFFSET	0xb2000000
-#define OMAP2_L4_IO_ADDRESS(pa)	IOMEM((pa) + OMAP2_L4_IO_OFFSET)
-
-static inline u8 omap_readb(u32 pa)
-{
-	return __raw_readb(OMAP2_L4_IO_ADDRESS(pa));
-}
-
-static inline u16 omap_readw(u32 pa)
-{
-	return __raw_readw(OMAP2_L4_IO_ADDRESS(pa));
-}
-
-static inline u32 omap_readl(u32 pa)
-{
-	return __raw_readl(OMAP2_L4_IO_ADDRESS(pa));
-}
-
-static inline void omap_writeb(u8 v, u32 pa)
-{
-	__raw_writeb(v, OMAP2_L4_IO_ADDRESS(pa));
-}
-
-
-static inline void omap_writew(u16 v, u32 pa)
-{
-	__raw_writew(v, OMAP2_L4_IO_ADDRESS(pa));
-}
-
-static inline void omap_writel(u32 v, u32 pa)
-{
-	__raw_writel(v, OMAP2_L4_IO_ADDRESS(pa));
-}
-
+extern int omap4430_usbhs_update_sar(void);
 #endif
 
 extern void am35x_musb_reset(void);
 extern void am35x_musb_phy_power(u8 on);
 extern void am35x_musb_clear_irq(void);
 extern void am35x_set_mode(u8 musb_mode);
-extern void ti81xx_musb_phy_power(u8 on);
 
 /*
  * FIXME correct answer depends on hmc_mode,
@@ -311,37 +283,6 @@ static inline void omap2_usbfs_init(struct omap_usb_config *pdata)
 #define CONF2_OTGPWRDN		(1 << 2)
 #define CONF2_DATPOL		(1 << 1)
 
-/* TI81XX specific definitions */
-#define USBCTRL0	0x620
-#define USBSTAT0	0x624
-
-/* TI816X PHY controls bits */
-#define TI816X_USBPHY0_NORMAL_MODE	(1 << 0)
-#define TI816X_USBPHY_REFCLK_OSC	(1 << 8)
-
-/* TI814X PHY controls bits */
-#define USBPHY_CM_PWRDN		(1 << 0)
-#define USBPHY_OTG_PWRDN	(1 << 1)
-#define USBPHY_CHGDET_DIS	(1 << 2)
-#define USBPHY_CHGDET_RSTRT	(1 << 3)
-#define USBPHY_SRCONDM		(1 << 4)
-#define USBPHY_SINKONDP		(1 << 5)
-#define USBPHY_CHGISINK_EN	(1 << 6)
-#define USBPHY_CHGVSRC_EN	(1 << 7)
-#define USBPHY_DMPULLUP		(1 << 8)
-#define USBPHY_DPPULLUP		(1 << 9)
-#define USBPHY_CDET_EXTCTL	(1 << 10)
-#define USBPHY_GPIO_MODE	(1 << 12)
-#define USBPHY_DPOPBUFCTL	(1 << 13)
-#define USBPHY_DMOPBUFCTL	(1 << 14)
-#define USBPHY_DPINPUT		(1 << 15)
-#define USBPHY_DMINPUT		(1 << 16)
-#define USBPHY_DPGPIO_PD	(1 << 17)
-#define USBPHY_DMGPIO_PD	(1 << 18)
-#define USBPHY_OTGVDET_EN	(1 << 19)
-#define USBPHY_OTGSESSEND_EN	(1 << 20)
-#define USBPHY_DATA_POLARITY	(1 << 23)
-
 #if defined(CONFIG_ARCH_OMAP1) && defined(CONFIG_USB)
 u32 omap1_usb0_init(unsigned nwires, unsigned is_device);
 u32 omap1_usb1_init(unsigned nwires);
@@ -361,5 +302,11 @@ static inline u32 omap1_usb2_init(unsigned nwires, unsigned alt_pingroup)
 	return 0;
 }
 #endif
+
+extern void usbhs_wakeup(void);
+extern void omap4_trigger_ioctrl(void);
+
+#define USBHS_EHCI_HWMODNAME	"usbhs_ehci"
+#define USBHS_OHCI_HWMODNAME    "usbhs_ohci"
 
 #endif	/* __ASM_ARCH_OMAP_USB_H */
