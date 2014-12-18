@@ -6,11 +6,9 @@
  * Licensed under GPLv2
  *
  * vga_switcheroo.c - Support for laptop with dual GPU using one set of outputs
-
  Switcher interface - methods require for ATPX and DCM
  - switchto - this throws the output MUX switch
  - discrete_set_power - sets the power state for the discrete card
-
  GPU driver interface
  - set_gpu_state - this should do the equiv of s/r for the card
 		  - this should *not* set the discrete power state
@@ -26,6 +24,7 @@
 #include <linux/fb.h>
 
 #include <linux/pci.h>
+#include <linux/console.h>
 #include <linux/vga_switcheroo.h>
 
 struct vga_switcheroo_client {
@@ -256,8 +255,10 @@ static int vga_switchto_stage2(struct vga_switcheroo_client *new_client)
 
 	if (new_client->fb_info) {
 		struct fb_event event;
+		console_lock();
 		event.info = new_client->fb_info;
 		fb_notifier_call_chain(FB_EVENT_REMAP_ALL_CONSOLE, &event);
+		console_unlock();
 	}
 
 	ret = vgasr_priv.handler->switchto(new_client->id);
