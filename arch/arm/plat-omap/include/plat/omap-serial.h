@@ -19,7 +19,6 @@
 
 #include <linux/serial_core.h>
 #include <linux/platform_device.h>
-#include <linux/pm_qos.h>
 
 #include <plat/mux.h>
 
@@ -34,18 +33,11 @@
 
 #define OMAP_MODE13X_SPEED	230400
 
-#define OMAP_UART_SCR_TX_EMPTY	0x08
-
-/* WER = 0x7F
- * Enable module level wakeup in WER reg
- */
-#define OMAP_UART_WER_MOD_WKUP	0X7F
-
 /* Enable XON/XOFF flow control on output */
-#define OMAP_UART_SW_TX		0x04
+#define OMAP_UART_SW_TX		0x8
 
 /* Enable XON/XOFF flow control on input */
-#define OMAP_UART_SW_RX		0x04
+#define OMAP_UART_SW_RX		0x2
 
 #define OMAP_UART_SYSC_RESET	0X07
 #define OMAP_UART_TCR_TRIG	0X0F
@@ -54,27 +46,62 @@
 
 #define OMAP_UART_DMA_CH_FREE	-1
 
+#define RX_TIMEOUT			(3 * HZ) /* RX DMA timeout (jiffies) */
+
+#define DEFAULT_RXDMA_TIMEOUT	(3 * HZ)	/* RX DMA timeout (jiffies) */
+#define DEFAULT_RXDMA_POLLRATE	1		/* RX DMA polling rate (us) */
+#define DEFAULT_RXDMA_BUFSIZE	4096		/* RX DMA buffer size */
+#define DEFAULT_AUTOSUSPEND_DELAY	3000	/* Runtime autosuspend (msecs)*/
+
+/*
+ * (Errata i659) - From OMAP4430 ES 2.0 onwards set
+ * tx_threshold while using UART in DMA Mode
+ * and ensure tx_threshold + tx_trigger <= 63
+ */
+#define UART_MDR3		0x20
+#define UART_TX_DMA_THRESHOLD	0x21
+#define SET_DMA_TX_THRESHOLD	BIT(2)
+/* Setting TX Threshold Level to 62 */
+#define TX_FIFO_THR_LVL		0x3E
+
 #define OMAP_MAX_HSUART_PORTS	4
 
 #define MSR_SAVE_FLAGS		UART_MSR_ANY_DELTA
 
 #define UART_ERRATA_i202_MDR1_ACCESS	BIT(0)
-#define UART_ERRATA_i291_DMA_FORCEIDLE	BIT(1)
+#define OMAP4_UART_ERRATA_i659_TX_THR	BIT(1)
+
+#define OMAP_UART_WER_TX        0x80
+#define OMAP_UART_WER_RLSI      0x40
+#define OMAP_UART_WER_RHRI      0x20
+#define OMAP_UART_WER_RX        0x10
+#define OMAP_UART_WER_DCDCD     0x08
+#define OMAP_UART_WER_RI        0x04
+#define OMAP_UART_WER_DSR       0x02
+#define OMAP_UART_WER_CTS       0x01
+
+#define OMAP_UART_SCR_TX_EMPTY	0x08
 
 struct omap_uart_port_info {
-	bool			dma_enabled;	/* To specify DMA Mode */
+	int                     dma_rx_buf_size;/* DMA Rx Buffer Size */
+	int                     dma_rx_timeout; /* DMA RX timeout */
+	unsigned int            idle_timeout;   /* Omap Uart Idle Time out */
+	int                     use_dma;        /* DMA Enable / Disable */
 	unsigned int		uartclk;	/* UART clock rate */
 	upf_t			flags;		/* UPF_* flags */
-	u32			errata;
-	unsigned int		dma_rx_buf_size;
-	unsigned int		dma_rx_timeout;
-	unsigned int		autosuspend_timeout;
-	unsigned int		dma_rx_poll_rate;
+	unsigned int		errata;
+	unsigned int		console_uart;
+	u16			wer;		/* Module Wakeup register */
+	unsigned int		dma_rx_poll_rate; /* DMA RX poll_rate */
+	unsigned int		auto_sus_timeout; /* Auto_suspend timeout */
+	unsigned		rts_mux_driver_control:1;
 
-	int (*get_context_loss_count)(struct device *);
-	void (*set_forceidle)(struct platform_device *);
-	void (*set_noidle)(struct platform_device *);
 	void (*enable_wakeup)(struct platform_device *, bool);
+	bool (*chk_wakeup)(struct platform_device *);
+	void (*wake_peer)(struct uart_port *);
+	void __iomem *wk_st;
+	void __iomem *wk_en;
+	u32 wk_mask;
 };
 
 struct uart_omap_dma {
@@ -116,9 +143,16 @@ struct uart_omap_port {
 	unsigned char		dll;
 	unsigned char		dlh;
 	unsigned char		mdr1;
+	unsigned char		wer;
 	unsigned char		scr;
 
+#ifdef CONFIG_OMAP4_DPLL_CASCADING
+	unsigned int            baud_rate;
+	struct notifier_block   nb;
+#endif
+
 	int			use_dma;
+	bool			suspended;
 	/*
 	 * Some bits in registers are cleared on a read, so they must
 	 * be saved whenever the register is read but the bits will not
@@ -127,15 +161,20 @@ struct uart_omap_port {
 	unsigned int		lsr_break_flag;
 	unsigned char		msr_saved_flags;
 	char			name[20];
+	unsigned int		console_lock;
 	unsigned long		port_activity;
-	u32			context_loss_cnt;
-	u32			errata;
-	u8			wakeups_enabled;
+	int			context_loss_cnt;
+	/* RTS control via driver */
+	unsigned		rts_mux_driver_control:1;
+	unsigned		rts_pullup_in_suspend:1;
 
-	struct pm_qos_request	pm_qos_request;
-	u32			latency;
-	u32			calc_latency;
-	struct work_struct	qos_work;
+	unsigned int		errata;
+	unsigned char		wer_restore;
+	void (*enable_wakeup)(struct platform_device *, bool);
+	bool (*chk_wakeup)(struct platform_device *);
+	void (*wake_peer)(struct uart_port *);
 };
 
+int omap_serial_ext_uart_enable(u8 port_id);
+int omap_serial_ext_uart_disable(u8 port_id);
 #endif /* __OMAP_SERIAL_H__ */
