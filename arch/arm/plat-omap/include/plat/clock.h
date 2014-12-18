@@ -14,6 +14,7 @@
 #define __ARCH_ARM_OMAP_CLOCK_H
 
 #include <linux/list.h>
+#include <linux/notifier.h>
 
 struct module;
 struct clk;
@@ -56,16 +57,15 @@ struct clkops {
 #define RATE_IN_3430ES1		(1 << 2)	/* 3430ES1 rates only */
 #define RATE_IN_3430ES2PLUS	(1 << 3)	/* 3430 ES >= 2 rates only */
 #define RATE_IN_36XX		(1 << 4)
-#define RATE_IN_4430		(1 << 5)
+#define RATE_IN_443X		(1 << 5)
 #define RATE_IN_TI816X		(1 << 6)
-#define RATE_IN_4460		(1 << 7)
-#define RATE_IN_AM33XX		(1 << 8)
-#define RATE_IN_TI814X		(1 << 9)
+#define RATE_IN_446X		(1 << 7)
+#define RATE_IN_447X		(1 << 8)
 
 #define RATE_IN_24XX		(RATE_IN_242X | RATE_IN_243X)
 #define RATE_IN_34XX		(RATE_IN_3430ES1 | RATE_IN_3430ES2PLUS)
 #define RATE_IN_3XXX		(RATE_IN_34XX | RATE_IN_36XX)
-#define RATE_IN_44XX		(RATE_IN_4430 | RATE_IN_4460)
+#define RATE_IN_44XX		(RATE_IN_443X | RATE_IN_446X | RATE_IN_447X)
 
 /* RATE_IN_3430ES2PLUS_36XX includes 34xx/35xx with ES >=2, and all 36xx/37xx */
 #define RATE_IN_3430ES2PLUS_36XX	(RATE_IN_3430ES2PLUS | RATE_IN_36XX)
@@ -82,6 +82,8 @@ struct clkops {
  *
  * @div is the divisor that should be applied to the parent clock's rate
  * to produce the current clock's rate.
+ *
+ * XXX @flags probably should be replaced with an struct omap_chip.
  */
 struct clksel_rate {
 	u32			val;
@@ -154,7 +156,7 @@ struct dpll_data {
 	u16			max_multiplier;
 	u8			last_rounded_n;
 	u8			min_divider;
-	u16			max_divider;
+	u8			max_divider;
 	u8			modes;
 #if defined(CONFIG_ARCH_OMAP3) || defined(CONFIG_ARCH_OMAP4)
 	void __iomem		*autoidle_reg;
@@ -167,11 +169,72 @@ struct dpll_data {
 	u8			auto_recal_bit;
 	u8			recal_en_bit;
 	u8			recal_st_bit;
-#  endif
 	u8			flags;
+#  endif
 };
 
 #endif
+
+/*
+ * Clk notifier callback types
+ *
+ * Since the notifier is called with interrupts disabled, any actions
+ * taken by callbacks must be extremely fast and lightweight.
+ *
+ * CLK_PRE_RATE_CHANGE - called after all callbacks have approved the
+ *     rate change, immediately before the clock rate is changed, to
+ *     indicate that the rate change will proceed.  Drivers must
+ *     immediately terminate any operations that will be affected by
+ *     the rate change.  Callbacks must always return NOTIFY_DONE.
+ *
+ * CLK_ABORT_RATE_CHANGE: called if the rate change failed for some
+ *     reason after CLK_PRE_RATE_CHANGE.  In this case, all registered
+ *     notifiers on the clock will be called with
+ *     CLK_ABORT_RATE_CHANGE. Callbacks must always return
+ *     NOTIFY_DONE.
+ *
+ * CLK_POST_RATE_CHANGE - called after the clock rate change has
+ *     successfully completed.  Callbacks must always return
+ *     NOTIFY_DONE.
+ *
+ */
+#define CLK_ABORT_RATE_CHANGE		2
+#define CLK_PRE_RATE_CHANGE		3
+#define CLK_POST_RATE_CHANGE		4
+
+/**
+ * struct clk_notifier - associate a clk with a notifier
+ * @clk: struct clk * to associate the notifier with
+ * @notifier_head: a blocking_notifier_head for this clk
+ * @node: linked list pointers
+ *
+ * A list of struct clk_notifier is maintained by the notifier code.
+ * An entry is created whenever code registers the first notifier on a
+ * particular @clk.  Future notifiers on that @clk are added to the
+ * @notifier_head.
+ */
+struct clk_notifier {
+	struct clk			*clk;
+	struct blocking_notifier_head	notifier_head;
+	struct list_head		node;
+};
+
+/**
+ * struct clk_notifier_data - rate data to pass to the notifier callback
+ * @clk: struct clk * being changed
+ * @old_rate: previous rate of this clock
+ * @new_rate: new rate of this clock
+ *
+ * For a pre-notifier, old_rate is the clock's rate before this rate
+ * change, and new_rate is what the rate will be in the future.  For a
+ * post-notifier, old_rate and new_rate are both set to the clock's
+ * current rate (this was done to optimize the implementation).
+ */
+struct clk_notifier_data {
+       struct clk              *clk;
+       unsigned long           old_rate;
+       unsigned long           new_rate;
+};
 
 /*
  * struct clk.flags possibilities
@@ -249,9 +312,11 @@ struct clk {
 	unsigned long		rate;
 	void __iomem		*enable_reg;
 	unsigned long		(*recalc)(struct clk *);
+	unsigned long		(*speculate)(struct clk *, unsigned long);
 	int			(*set_rate)(struct clk *, unsigned long);
 	long			(*round_rate)(struct clk *, unsigned long);
 	void			(*init)(struct clk *);
+	u16			notifier_count;
 	u8			enable_bit;
 	s8			usecount;
 	u8			fixed_div;
@@ -272,15 +337,23 @@ struct clk {
 #endif
 };
 
+struct cpufreq_frequency_table;
+
 struct clk_functions {
 	int		(*clk_enable)(struct clk *clk);
 	void		(*clk_disable)(struct clk *clk);
 	long		(*clk_round_rate)(struct clk *clk, unsigned long rate);
+	long		(*clk_round_rate_parent)(struct clk *clk,
+						struct clk *parent);
 	int		(*clk_set_rate)(struct clk *clk, unsigned long rate);
 	int		(*clk_set_parent)(struct clk *clk, struct clk *parent);
 	void		(*clk_allow_idle)(struct clk *clk);
 	void		(*clk_deny_idle)(struct clk *clk);
 	void		(*clk_disable_unused)(struct clk *clk);
+#ifdef CONFIG_CPU_FREQ
+	void		(*clk_init_cpufreq_table)(struct cpufreq_frequency_table **);
+	void		(*clk_exit_cpufreq_table)(struct cpufreq_frequency_table **);
+#endif
 };
 
 extern int mpurate;
@@ -294,13 +367,20 @@ extern void propagate_rate(struct clk *clk);
 extern void recalculate_root_clocks(void);
 extern unsigned long followparent_recalc(struct clk *clk);
 extern void clk_enable_init_clocks(void);
+extern int clk_notifier_register(struct clk *clk, struct notifier_block *nb);
+extern int clk_notifier_unregister(struct clk *clk, struct notifier_block *nb);
 unsigned long omap_fixed_divisor_recalc(struct clk *clk);
+#ifdef CONFIG_CPU_FREQ
+extern void clk_init_cpufreq_table(struct cpufreq_frequency_table **table);
+extern void clk_exit_cpufreq_table(struct cpufreq_frequency_table **table);
+#endif
 extern struct clk *omap_clk_get_by_name(const char *name);
 extern int omap_clk_enable_autoidle_all(void);
 extern int omap_clk_disable_autoidle_all(void);
 
 extern const struct clkops clkops_null;
-
+extern long clk_dummy_round_rate(struct clk *clk, unsigned long rate);
+extern int clk_dummy_set_rate(struct clk *clk, unsigned long rate);
 extern struct clk dummy_ck;
 
 #endif
