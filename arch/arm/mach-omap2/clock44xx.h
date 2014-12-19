@@ -9,12 +9,20 @@
 #define __ARCH_ARM_MACH_OMAP2_CLOCK44XX_H
 
 /*
- * OMAP4430_REGM4XEN_MULT: If the CM_CLKMODE_DPLL_ABE.DPLL_REGM4XEN bit is
- *    set, then the DPLL's lock frequency is multiplied by 4 (OMAP4430 TRM
- *    vV Section 3.6.3.3.1 "DPLLs Output Clocks Parameters")
+ * XXX Missing values for the OMAP4 DPLL_USB
+ * XXX Missing min_multiplier values for all OMAP4 DPLLs
  */
-#define OMAP4430_REGM4XEN_MULT	4
+#define OMAP4470_MAX_DPLL_MULT	4095
+#define OMAP4470_MAX_DPLL_DIV	256
+#define OMAP4430_MAX_DPLL_MULT	2047
+#define OMAP4430_MAX_DPLL_DIV	128
+#define OMAP4430_REGM4XEN_MULT 4
 
 int omap4xxx_clk_init(void);
+int omap4_core_dpll_m2_set_rate(struct clk *clk, unsigned long rate);
+
+#ifdef CONFIG_OMAP4_DPLL_CASCADING
+int omap4_core_dpll_set_rate(struct clk *clk, unsigned long rate);
+#endif
 
 #endif
