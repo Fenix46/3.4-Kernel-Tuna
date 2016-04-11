@@ -24,6 +24,7 @@
 #include <linux/export.h>
 #include <linux/suspend.h>
 #include <linux/syscore_ops.h>
+#include <linux/ftrace.h>
 #include <linux/rtc.h>
 #include <trace/events/power.h>
 
@@ -171,6 +172,8 @@ static int suspend_enter(suspend_state_t state, bool *wakeup)
 		if (!(suspend_test(TEST_CORE) || *wakeup)) {
 			error = suspend_ops->enter(state);
 			events_check_enabled = false;
+		} else if (*wakeup) {
+			error = -EBUSY;
 		}
 		syscore_resume();
 	}
